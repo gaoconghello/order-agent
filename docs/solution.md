@@ -1,6 +1,6 @@
-这是一份为你定制的 **TypeScript + Bun** 版本的 AI Agent 系统实现指南。
+# TypeScript + Bun AI Agent 系统实现方案
 
-根据你提供的架构设计，我们将沿用 Pi Agent 的核心哲学：**“Harness（引擎）是空壳，业务（Capabilities）全靠注册注入”**。由于你选择使用 **Bun**，我们可以直接享受原生的 TypeScript 支持，并利用 Bun 内置的高性能工具库（如 `bun:sqlite`）来极大地简化对账和存储系统的开发。
+基于 Pi Agent 的核心设计：**引擎层（Harness）仅提供运行框架，业务逻辑（Capabilities）通过注册机制注入**。使用 Bun 的原生 TypeScript 支持及其内置工具库（如 `bun:sqlite`）简化存储与对账系统的实现。
 
 ---
 
@@ -14,45 +14,43 @@ cd order-agent
 bun init
 ```
 
-`bun init` 会自动为你生成 `tsconfig.json`、`package.json` 以及 `index.ts`。
+`bun init` 生成 `tsconfig.json`、`package.json` 及 `index.ts`。
 
-接下来，安装大模型调用所需的依赖。这里以官方 SDK 为例（你也可以直接使用 `openai` 或其他大模型 SDK 兼容套件）：
+安装大模型调用所需的依赖。这里以 OpenAI API 为例（兼容 Qwen / DeepSeek 等模型的接口）：
 
 ```bash
-bun add @google/genai # 如果使用 Gemini 
-# 或者
-bun add openai # 如果使用 Qwen / DeepSeek 等兼容 OpenAI 接口的模型
+bun add openai
 ```
 
 ---
 
 ## 2. 推荐的目录结构
 
-遵循文章中的“三层架构”，在 TypeScript 中我们可以这样布局：
+采用三层架构布局：
 
 ```text
 order-agent/
 ├── src/
-│   ├── core/                  # 🚀 核心引擎层（绝对不能 import capabilities）
-│   │   ├── agent.ts           # Agent 核心 while 循环
+│   ├── core/                  # 核心引擎层（禁止 import capabilities）
+│   │   ├── agent.ts           # Agent 主循环
 │   │   ├── registry.ts        # Tool 注册表
-│   │   ├── llm.ts             # 抹平模型差异的适配器
+│   │   ├── llm.ts             # LLM 适配器
 │   │   ├── event-bus.ts       # 事件总线
-│   │   └── types.ts           # 通用基础类型 (Message, ToolCall)
+│   │   └── types.ts           # 基础类型 (Message, ToolCall)
 │   │
-│   ├── capabilities/          # 💼 业务能力层（可随时整体替换）
+│   ├── capabilities/          # 业务能力层
 │   │   ├── domain/            # 领域模型 (纯 TS 逻辑)
 │   │   ├── store/             # 数据库操作 (使用 bun:sqlite)
 │   │   ├── tools/             # 具体业务工具 (下单、对账等)
 │   │   ├── extensions/        # 数据流管道 (按天分段、脱敏)
 │   │   └── skills/            # 顶层复杂流控指南 (Markdown)
 │   │
-│   ├── context/               # 📝 Prompt 资产
+│   ├── context/               # Prompt 资产
 │   │   ├── business.md        # 行业常识
 │   │   ├── role.md            # 角色设定
 │   │   └── groups/            # 客户群画像 (Group Memories)
 │   │
-│   ├── gateway/               # 🔌 入口适配器
+│   ├── gateway/               # 入口适配器
 │   │   ├── json-gateway.ts    # 读取本地 JSON 历史消息
 │   │   └── wechat-gateway.ts  # 未来扩展的微信接入
 │   │
@@ -67,7 +65,7 @@ order-agent/
 
 ### 3.1 `core/types.ts` — 核心类型定义
 
-在 TS 中，利用联合类型（Union Types）可以非常精准地定义消息和工具。
+使用联合类型（Union Types）定义消息和工具：
 
 ```typescript
 export interface Message {
@@ -96,7 +94,7 @@ export interface ToolDefinition {
 
 ### 3.2 `core/registry.ts` — 零内聚工具注册表
 
-利用 TS 的 Map 机制，实现文章中提到的“加新功能 = 写新文件 + 注册”的无侵入设计。
+通过 Map 实现工具注册，新增功能只需“写新文件 + 注册”即可。
 
 ```typescript
 import { ToolDefinition } from './types';
@@ -125,12 +123,12 @@ export class ToolRegistry {
 
 ### 3.3 `core/agent.ts` — 业务无关的 Agent Loop
 
-这里需要实现关键的 **While 循环**，并且注入文章中踩坑总结的经验：**当模型返回 `tool_calls` 时，即使 content 有文本也要主动丢弃/特殊处理，防止 Qwen 等模型陷入自我解释的死循环**。
+当模型返回 `tool_calls` 时，即使 content 包含文本也须主动丢弃，防止模型在下一轮将自身输出误判为未执行的工具调用。
 
 ```typescript
 import { Message, ToolCall } from './types';
 import { ToolRegistry } from './registry';
-import { callLLM } from './llm'; // 假设你封装好的大模型请求
+import { callLLM } from './llm';
 
 export async function runAgentLoop(sessionHistory: Message[]): Promise<Message[]> {
   let loopCount = 0;
@@ -173,7 +171,7 @@ export async function runAgentLoop(sessionHistory: Message[]): Promise<Message[]
         }
       }
 
-      // 4. 将工具执行结果喂回上下文
+      // 4. 将工具执行结果追加到上下文
       sessionHistory.push({
         role: 'tool',
         tool_call_id: toolCall.id,
@@ -190,9 +188,9 @@ export async function runAgentLoop(sessionHistory: Message[]): Promise<Message[]
 
 ## 4. 业务层利用 Bun 的特殊优化
 
-### 4.1 完美的本地化存储与表结构迁移：`bun:sqlite` + Drizzle ORM
+### 4.1 本地存储与表结构迁移：`bun:sqlite` + Drizzle ORM
 
-文章中提到使用 SQLite 来存放订单、转账等数据。Bun **原生内置**了效率极高的 SQLite 库，为了更好地管理表结构并保留完整的迁移历史（Migration），我们引入 TypeScript 生态最强悍的轻量级框架 **Drizzle ORM**。
+Bun 内置了 SQLite 库。结合 Drizzle ORM 管理表结构及迁移历史。
 
 首先安装相关依赖：
 
@@ -201,7 +199,7 @@ bun add drizzle-orm
 bun add -d drizzle-kit
 ```
 
-配置 Drizzle 的表结构，在 `src/capabilities/store/schema.ts` 中定义我们讨论过的核心业务表：
+在 `src/capabilities/store/schema.ts` 中定义核心业务表：
 
 ```typescript
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
@@ -257,7 +255,7 @@ const sqlite = new Database("wholesale_business.sqlite", { create: true });
 export const db = drizzle(sqlite, { schema });
 ```
 
-如果你想使用自动生成迁移的功能，在项目根目录建一个 `drizzle.config.ts`：
+如需自动生成迁移，在项目根目录创建 `drizzle.config.ts`：
 
 ```typescript
 import { defineConfig } from "drizzle-kit";
@@ -271,7 +269,7 @@ export default defineConfig({
   }
 });
 ```
-之后你只需运行 `bunx drizzle-kit generate` 和 `bunx drizzle-kit migrate` 就能完美实现 schema 的追踪和增量迁移。
+运行 `bunx drizzle-kit generate` 和 `bunx drizzle-kit migrate` 实现 schema 追踪和增量迁移。
 
 ### 4.2 编写一个具体的 Tool 例子
 
@@ -317,9 +315,9 @@ ToolRegistry.register({
 
 ---
 
-## 5. 关于 Prompt 编排与 KV Cache
+## 5. Prompt 编排与 KV Cache
 
-正如你在文中所分析的，为了最大化利用大模型的 **KV Cache 复用** 并遵循 **Lost in the Middle（注意力 U 型分布）** 原理，你在动态组装 `system_prompt` 时，应该在内存中按如下顺序拼接字符串：
+为最大化 **KV Cache 复用** 并遵循 **Lost in the Middle** 原理，按以下顺序组装 `system_prompt`：
 
 ```typescript
 async function buildSystemPrompt(groupId: string): Promise<string> {
@@ -348,14 +346,14 @@ ${groupMemory}
 
 ---
 
-## 6. 如何流畅地启动与开发
+## 6. 启动与运行
 
-在 `src/index.ts` 中，引入你的 Gateway 读入消息，并动态把 `tools/` 目录下的所有文件全部 import 进来（完成 Bootstrap 自动扫描），即可运行：
+在 `src/index.ts` 中引入 Gateway 读入消息，并 import `tools/` 目录下的文件完成注册：
 
 ```typescript
 // 1. 自动扫描并注册所有业务 Tools
 import "./capabilities/tools/order-tool";
-// import "./capabilities/tools/transfer-tool"; // 后续随时增加
+// import "./capabilities/tools/transfer-tool"; // 按需启用
 
 import { buildSystemPrompt } from "./context/prompt-builder";
 import { runAgentLoop } from "./core/agent";
@@ -376,16 +374,18 @@ async function main() {
     ...rawMessagesFromGateway as any
   ];
 
-  console.log("🚀 Agent 启动处理消息...");
+  console.log("Agent 启动处理消息...");
   const finalState = await runAgentLoop(sessionHistory);
-  console.log("🏁 处理完成，最终对话状态总轮数:", finalState.length);
+  console.log("处理完成，最终对话状态总轮数:", finalState.length);
 }
 
 main();
 ```
 
-要运行这个项目，无需配置复杂的 Webpack/Babel，直接在终端敲击：
+运行项目：
 
 ```bash
 bun run src/index.ts
 ```
+
+
